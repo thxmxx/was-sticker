@@ -1,6 +1,6 @@
 {
   "name": "was-sticker",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "Re-brand WhatsApp Lottie stickers (.was) and send them via Baileys as a real lottieStickerMessage.",
   "type": "module",
   "main": "./src/index.js",
