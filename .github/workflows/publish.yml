@@ -22,9 +22,12 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
           registry-url: 'https://registry.npmjs.org'
           cache: npm
+
+      # Trusted Publisher auth requires npm 11.5.1+.
+      - run: npm install -g npm@latest
 
       - run: npm ci
 
@@ -40,7 +43,5 @@ jobs:
             exit 1
           fi
 
-      - name: Publish to npm
+      - name: Publish to npm (OIDC Trusted Publisher)
         run: npm publish --access public --provenance --tag "${{ github.event.inputs.tag || 'latest' }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
