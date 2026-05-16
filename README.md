@@ -22,7 +22,7 @@ npm install was-sticker
 npm install @whiskeysockets/baileys      # peer dep, only needed for send/capture
 ```
 
-Requires Node.js ≥ 18.
+Requires Node.js ≥ 20 (Baileys' postinstall enforces this).
 
 ## Quick start
 
