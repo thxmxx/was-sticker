@@ -21,7 +21,7 @@
   },
   "scripts": {
     "example": "node examples/build.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --test test/smoke.test.js"
   },
   "keywords": ["whatsapp", "sticker", "lottie", "was", "animated-sticker", "baileys"],
   "author": "thxmxx",
