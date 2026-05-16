@@ -1,0 +1,5 @@
+node_modules/
+*.was
+*.zip
+examples/out/
+.DS_Store
