@@ -31,6 +31,27 @@ function findStickerMessage(msg) {
   return null;
 }
 
+async function downloadSticker(stk) {
+  const { downloadContentFromMessage } = await loadBaileys();
+  const stream = await downloadContentFromMessage(stk, 'sticker');
+  const chunks = [];
+  for await (const c of stream) chunks.push(c);
+  return Buffer.concat(chunks);
+}
+
+function buildResult(buffer, stk, key) {
+  return {
+    buffer,
+    stickerMessage: stk,
+    key,
+    mimetype: stk.mimetype ?? null,
+    isLottie: !!stk.isLottie,
+    isAnimated: !!stk.isAnimated,
+    width: stk.width ?? 0,
+    height: stk.height ?? 0,
+  };
+}
+
 /**
  * Resolve when the next sticker (Lottie or otherwise) matching `filter` arrives.
  *
@@ -75,25 +96,11 @@ export function captureNextLottieSticker(sock, opts = {}) {
         if (filter && !filter(stk, m.key)) continue;
 
         try {
-          const { downloadContentFromMessage } = await loadBaileys();
-          const stream = await downloadContentFromMessage(stk, 'sticker');
-          const chunks = [];
-          for await (const c of stream) chunks.push(c);
-          const buffer = Buffer.concat(chunks);
-
+          const buffer = await downloadSticker(stk);
           settled = true;
           if (timer) clearTimeout(timer);
           sock.ev.off('messages.upsert', onUpsert);
-          resolve({
-            buffer,
-            stickerMessage: stk,
-            key: m.key,
-            mimetype: stk.mimetype ?? null,
-            isLottie: !!stk.isLottie,
-            isAnimated: !!stk.isAnimated,
-            width: stk.width ?? 0,
-            height: stk.height ?? 0,
-          });
+          resolve(buildResult(buffer, stk, m.key));
         } catch (err) {
           settled = true;
           if (timer) clearTimeout(timer);
@@ -115,4 +122,60 @@ export function captureNextLottieSticker(sock, opts = {}) {
       }, timeoutMs);
     }
   });
+}
+
+/**
+ * Continuous version of `captureNextLottieSticker`: invokes `handler` for every
+ * incoming Lottie sticker until you call the returned unsubscribe function.
+ *
+ * The handler may be async; downloads run concurrently if multiple stickers
+ * arrive at once. Errors from the handler are swallowed (logged to console) so
+ * a bad reply doesn't kill the subscription.
+ *
+ * @param {object} sock — connected Baileys socket
+ * @param {(sticker: {
+ *   buffer: Buffer, stickerMessage: object, key: object,
+ *   mimetype: string|null, isLottie: boolean, isAnimated: boolean,
+ *   width: number, height: number,
+ * }) => void | Promise<void>} handler
+ * @param {{
+ *   from?: string,
+ *   filter?: (stickerMessage, key) => boolean,
+ *   includeNonLottie?: boolean,
+ *   includeFromMe?: boolean,   // default true (so it works on self-bots)
+ * }} [opts]
+ * @returns {() => void} unsubscribe
+ */
+export function subscribeLottieStickers(sock, handler, opts = {}) {
+  if (!sock || typeof sock.ev?.on !== 'function') {
+    throw new Error('subscribeLottieStickers: first argument must be a Baileys socket.');
+  }
+  if (typeof handler !== 'function') {
+    throw new Error('subscribeLottieStickers: handler must be a function.');
+  }
+  const { from, filter, includeNonLottie = false, includeFromMe = true } = opts;
+
+  const onUpsert = async ({ messages }) => {
+    for (const m of messages) {
+      if (!m.message) continue;
+      if (from && m.key.remoteJid !== from) continue;
+      if (!includeFromMe && m.key.fromMe) continue;
+
+      const stk = findStickerMessage(m.message);
+      if (!stk) continue;
+      if (!includeNonLottie && !stk.isLottie) continue;
+      if (filter && !filter(stk, m.key)) continue;
+
+      try {
+        const buffer = await downloadSticker(stk);
+        await handler(buildResult(buffer, stk, m.key));
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error('subscribeLottieStickers handler error:', err.message);
+      }
+    }
+  };
+
+  sock.ev.on('messages.upsert', onUpsert);
+  return () => sock.ev.off('messages.upsert', onUpsert);
 }
