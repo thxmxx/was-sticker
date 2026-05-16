@@ -1,6 +1,6 @@
 {
   "name": "was-sticker",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Build WhatsApp animated stickers (.was) from images and Lottie templates. Pure JS, no shell dependencies.",
   "type": "module",
   "main": "./src/index.js",
@@ -23,7 +23,14 @@
     "example": "node examples/build.js",
     "test": "node --test test/smoke.test.js"
   },
-  "keywords": ["whatsapp", "sticker", "lottie", "was", "animated-sticker", "baileys"],
+  "keywords": [
+    "whatsapp",
+    "sticker",
+    "lottie",
+    "was",
+    "animated-sticker",
+    "baileys"
+  ],
   "author": "thxmxx",
   "license": "MIT",
   "repository": {
