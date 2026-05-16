@@ -19,4 +19,4 @@
 export { extractFromWAS, inspectWAS } from './extract.js';
 export { customizeMetadata } from './customize.js';
 export { sendLottieSticker } from './send.js';
-export { captureNextLottieSticker } from './capture.js';
+export { captureNextLottieSticker, subscribeLottieStickers } from './capture.js';
