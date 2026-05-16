@@ -12,7 +12,9 @@
   },
   "files": [
     "src",
-    "README.md"
+    "templates",
+    "README.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=18"
@@ -22,7 +24,16 @@
     "test": "node --test test/*.test.js"
   },
   "keywords": ["whatsapp", "sticker", "lottie", "was", "animated-sticker", "baileys"],
+  "author": "thxmxx",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/thxmxx/was-sticker.git"
+  },
+  "homepage": "https://github.com/thxmxx/was-sticker#readme",
+  "bugs": {
+    "url": "https://github.com/thxmxx/was-sticker/issues"
+  },
   "dependencies": {
     "jszip": "^3.10.1"
   }

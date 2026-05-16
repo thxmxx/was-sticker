@@ -1,5 +1,6 @@
 import { readFile, writeFile, mkdir, stat, readdir } from 'node:fs/promises';
 import { dirname, join, relative, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import JSZip from 'jszip';
 
 import {
@@ -7,6 +8,23 @@ import {
   detectMimeFromBuffer,
   detectMimeFromExtension,
 } from './mime.js';
+
+const TEMPLATES_DIR = fileURLToPath(new URL('../templates/', import.meta.url));
+const BUNDLED_TEMPLATE_NAMES = Object.freeze(['pulse']);
+
+/**
+ * Resolve the absolute path of a Lottie template bundled with this package.
+ * @param {'pulse'} [name='pulse']
+ * @returns {string} absolute path to the template's JSON file
+ */
+export function bundledTemplate(name = 'pulse') {
+  if (!BUNDLED_TEMPLATE_NAMES.includes(name)) {
+    throw new Error(
+      `Unknown bundled template "${name}". Available: ${BUNDLED_TEMPLATE_NAMES.join(', ')}.`,
+    );
+  }
+  return join(TEMPLATES_DIR, name, 'animation.json');
+}
 
 const DEFAULT_JSON_ENTRY = 'animation/animation.json';
 
@@ -214,3 +232,4 @@ export async function buildLottieSticker({
 }
 
 export { SUPPORTED_MIMES, detectMimeFromBuffer, detectMimeFromExtension };
+export { BUNDLED_TEMPLATE_NAMES };

@@ -5,7 +5,7 @@ import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import JSZip from 'jszip';
 
-import { buildLottieSticker, detectMimeFromBuffer } from '../src/index.js';
+import { buildLottieSticker, bundledTemplate, detectMimeFromBuffer } from '../src/index.js';
 
 // 1×1 transparent PNG
 const PNG = Buffer.from(
@@ -103,6 +103,22 @@ test('rejects template with no base64 image asset and no selector', async () => 
     }),
     /No embedded base64 image asset/,
   );
+});
+
+test('builds from the bundled "pulse" template', async () => {
+  const { buffer } = await buildLottieSticker({
+    image: { buffer: PNG, mime: 'image/png' },
+    template: bundledTemplate('pulse'),
+  });
+  const zip = await JSZip.loadAsync(buffer);
+  const jsonFile = zip.file('animation/animation.json');
+  assert.ok(jsonFile, 'expected JSON entry to be present');
+  const parsed = JSON.parse(await jsonFile.async('string'));
+  assert.equal(parsed.assets[0].p, `data:image/png;base64,${PNG.toString('base64')}`);
+});
+
+test('bundledTemplate rejects unknown name', () => {
+  assert.throws(() => bundledTemplate('nope'), /Unknown bundled template/);
 });
 
 test('asset selector by index works', async () => {

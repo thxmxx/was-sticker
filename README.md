@@ -18,6 +18,20 @@ npm install was-sticker
 
 Requires Node.js ≥ 18.
 
+## Quick start
+
+```js
+import { buildLottieSticker, bundledTemplate } from 'was-sticker';
+
+const { buffer } = await buildLottieSticker({
+  image: 'face.png',
+  template: bundledTemplate('pulse'),
+});
+// → buffer is a ready-to-send `.was` sticker
+```
+
+The package ships with a `pulse` template (1-second scale pulse, 30 fps) so you can produce a sticker out of the box without sourcing a Lottie file.
+
 ## API
 
 ```js
