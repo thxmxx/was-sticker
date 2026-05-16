@@ -2,4 +2,7 @@ node_modules/
 *.was
 *.zip
 examples/out/
+test/sandbox/*
+!test/sandbox/.gitkeep
+!test/sandbox/README.md
 .DS_Store
