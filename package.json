@@ -52,7 +52,7 @@
     }
   },
   "devDependencies": {
-    "@whiskeysockets/baileys": "^7.0.0-rc11",
+    "@whiskeysockets/baileys": "^6.7.0",
     "pino": "^10.3.1"
   }
 }
