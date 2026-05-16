@@ -1,33 +1,35 @@
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 
-import { buildLottieSticker } from '../src/index.js';
+import { buildLottieSticker, bundledTemplate } from '../src/index.js';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 
-// 1) Buffer in, Buffer out (no disk write) — ready to feed Baileys directly.
+// Demo image: a 1×1 transparent PNG. Replace `imageBuffer` with your real image.
+const imageBuffer = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAfbLI3wAAAABJRU5ErkJggg==',
+  'base64',
+);
+
+// 1) Buffer in, Buffer out — ready to hand to Baileys without touching disk.
 const { buffer: stickerBuffer } = await buildLottieSticker({
-  image: {
-    buffer: await readFile(resolve(here, 'face.png')),
-    mime: 'image/png',
-  },
-  template: resolve(here, '..', 'templates', 'heart'), // folder with the Lottie template
+  image: { buffer: imageBuffer, mime: 'image/png' },
+  template: bundledTemplate('pulse'),
 });
+console.log(`In-memory sticker: ${stickerBuffer.length} bytes`);
 
-console.log(`Built sticker: ${stickerBuffer.length} bytes`);
-
-// 2) Path in, file out — also returns the buffer if you need it.
+// 2) Write to disk and select the asset by index instead of the default.
+const outPath = resolve(here, 'out', 'pulse.was');
 const { output } = await buildLottieSticker({
-  image: resolve(here, 'face.png'),
-  template: resolve(here, '..', 'templates', 'heart'),
-  output: resolve(here, 'out', 'heart.was'),
-  assetSelector: 0, // pick by index instead of "first base64 asset"
+  image: { buffer: imageBuffer, mime: 'image/png' },
+  template: bundledTemplate('pulse'),
+  assetSelector: 0,
+  output: outPath,
 });
-
 console.log(`Wrote: ${output}`);
 
-// 3) Baileys integration sketch:
+// 3) Sketch of the Baileys send call:
 // await sock.sendMessage(jid, {
 //   sticker: stickerBuffer,
 //   mimetype: 'application/was',
