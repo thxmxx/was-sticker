@@ -204,6 +204,7 @@ export async function buildLottieSticker({
 
   const asset = findImageAsset(resolved.lottie, assetSelector);
   asset.p = toDataUri(imageBuffer, mime);
+  asset.e = 1; // mark as embedded — required by Lottie players to decode the data: URI
   if ('u' in asset) asset.u = '';
 
   const zip = new JSZip();
