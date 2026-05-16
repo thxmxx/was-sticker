@@ -1,145 +1,131 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { tmpdir } from 'node:os';
-import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import JSZip from 'jszip';
 
-import { buildLottieSticker, bundledTemplate, detectMimeFromBuffer } from '../src/index.js';
+import {
+  extractFromWAS,
+  inspectWAS,
+  customizeMetadata,
+} from '../src/index.js';
 
-// 1×1 transparent PNG
-const PNG = Buffer.from(
-  '89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4' +
-  '890000000d49444154789c6300010000000500010d0a2db40000000049454e44ae426082',
-  'hex',
-);
+// --- helpers -------------------------------------------------------------
 
-function fakeLottie() {
-  return {
-    v: '5.7.1',
-    fr: 30,
-    ip: 0,
-    op: 60,
-    w: 512,
-    h: 512,
-    nm: 'test',
-    ddd: 0,
-    assets: [
-      { id: 'image_0', w: 512, h: 512, u: '', p: 'data:image/png;base64,AAAA' },
-    ],
-    layers: [],
-  };
+const FAKE_LOTTIE = {
+  v: '5.12.1', fr: 30, ip: 0, op: 90, w: 512, h: 512,
+  nm: 'TEST_animation', ddd: 0,
+  assets: [], layers: [], markers: [],
+};
+
+const b64url = (buf) => Buffer.from(buf).toString('base64')
+  .replace(/=+$/, '').replace(/\+/g, '-').replace(/\//g, '_');
+
+function makeFakeTrustToken(jsonBytes) {
+  // We don't sign anything — the consumer (was-sticker) only inspects the
+  // claim and computes the SHA itself. The "signature" segment is irrelevant
+  // to our tests (signature verification happens client-side in WhatsApp).
+  const header = b64url(JSON.stringify({ alg: 'ES256', typ: 'JWT', kid: 'test' }));
+  const sha = createHash('sha256').update(jsonBytes).digest();
+  const payload = b64url(JSON.stringify({
+    sticker_file_type: 'lottie_json',
+    sticker_file_trusted_origin: 'whatsapp',
+    sticker_file_sha256: b64url(sha),
+  }));
+  return `${header}.${payload}.AAAA`;
 }
 
-test('MIME sniffing detects PNG magic bytes', () => {
-  assert.equal(detectMimeFromBuffer(PNG), 'image/png');
+async function buildFakeWAS({ metadata = null } = {}) {
+  const jsonBytes = Buffer.from(JSON.stringify(FAKE_LOTTIE), 'utf8');
+  const token = makeFakeTrustToken(jsonBytes);
+  const zip = new JSZip();
+  zip.file('animation/animation.json', jsonBytes);
+  zip.file('animation/animation.json.trust_token', token);
+  if (metadata) {
+    zip.file('animation/animation.json.overridden_metadata', JSON.stringify(metadata));
+  }
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
+// --- tests ---------------------------------------------------------------
+
+test('extractFromWAS parses animation, trust_token, metadata', async () => {
+  const buf = await buildFakeWAS({
+    metadata: { 'sticker-pack-name': 'orig', 'sticker-pack-publisher': 'A', emojis: ['🎃'] },
+  });
+  const { animation, trustToken, metadata, jsonPath } = await extractFromWAS(buf);
+
+  assert.equal(jsonPath, 'animation/animation.json');
+  assert.equal(animation.w, 512);
+  assert.equal(animation.nm, 'TEST_animation');
+  assert.equal(trustToken.payload.sticker_file_type, 'lottie_json');
+  assert.ok(/^[0-9a-f]{64}$/.test(trustToken.claimedShaHex));
+  assert.equal(metadata['sticker-pack-name'], 'orig');
 });
 
-test('builds a .was buffer from parsed-object template', async () => {
-  const { buffer, mime, output } = await buildLottieSticker({
-    image: { buffer: PNG, mime: 'image/png' },
-    template: fakeLottie(),
+test('inspectWAS reports shaMatches when token claim equals JSON SHA', async () => {
+  const buf = await buildFakeWAS();
+  const info = await inspectWAS(buf);
+  assert.equal(info.shaMatches, true);
+  assert.equal(info.trustToken.claimedSha, info.sha256);
+});
+
+test('customizeMetadata preserves the animation SHA', async () => {
+  const buf = await buildFakeWAS({
+    metadata: { 'sticker-pack-name': 'orig', 'sticker-pack-publisher': 'A' },
+  });
+  const beforeFiles = (await extractFromWAS(buf)).files;
+  const beforeSha = createHash('sha256').update(beforeFiles['animation/animation.json']).digest('hex');
+
+  const rebranded = await customizeMetadata(buf, {
+    packName: 'new', publisher: 'B', emojis: ['✅'],
+  });
+  const after = await inspectWAS(rebranded);
+  const afterFiles = (await extractFromWAS(rebranded)).files;
+  const afterSha = createHash('sha256').update(afterFiles['animation/animation.json']).digest('hex');
+
+  assert.equal(afterSha, beforeSha, 'animation.json must be byte-identical');
+  assert.equal(after.shaMatches, true);
+  assert.equal(after.metadata['sticker-pack-name'], 'new');
+  assert.equal(after.metadata['sticker-pack-publisher'], 'B');
+  assert.deepEqual(after.metadata.emojis, ['✅']);
+});
+
+test('customizeMetadata merges by default, replaces when {merge: false}', async () => {
+  const buf = await buildFakeWAS({
+    metadata: { 'sticker-pack-name': 'orig', 'sticker-pack-publisher': 'A' },
   });
 
-  assert.equal(mime, 'application/was');
-  assert.equal(output, undefined);
-  assert.ok(buffer.length > 100, 'output too small to be a real zip');
+  const merged = await inspectWAS(await customizeMetadata(buf, { packName: 'only name' }));
+  assert.equal(merged.metadata['sticker-pack-name'], 'only name');
+  assert.equal(merged.metadata['sticker-pack-publisher'], 'A');
 
-  const zip = await JSZip.loadAsync(buffer);
-  const jsonFile = zip.file('animation/animation.json');
-  assert.ok(jsonFile, 'expected JSON entry to be present');
-  const parsed = JSON.parse(await jsonFile.async('string'));
-  assert.equal(parsed.assets[0].p, `data:image/png;base64,${PNG.toString('base64')}`);
-});
-
-test('builds from a folder template and writes to disk', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'was-test-'));
-  await mkdir(join(dir, 'template', 'animation'), { recursive: true });
-  await writeFile(
-    join(dir, 'template', 'animation', 'animation_secondary.json'),
-    JSON.stringify(fakeLottie()),
+  const replaced = await inspectWAS(
+    await customizeMetadata(buf, { packName: 'only name' }, { merge: false }),
   );
-  await writeFile(join(dir, 'template', 'README.txt'), 'sibling asset');
-
-  const out = join(dir, 'sticker.was');
-  await buildLottieSticker({
-    image: { buffer: PNG, mime: 'image/png' },
-    template: join(dir, 'template'),
-    output: out,
-  });
-
-  const zip = await JSZip.loadAsync(await readFile(out));
-  assert.ok(zip.file('animation/animation_secondary.json'), 'lottie JSON missing');
-  assert.ok(zip.file('README.txt'), 'sibling asset missing');
+  assert.equal(replaced.metadata['sticker-pack-name'], 'only name');
+  assert.equal(replaced.metadata['sticker-pack-publisher'], undefined);
 });
 
-test('marks the patched asset as embedded (e: 1) so players decode the data URI', async () => {
-  const { buffer } = await buildLottieSticker({
-    image: { buffer: PNG, mime: 'image/png' },
-    template: fakeLottie(),
-  });
-  const zip = await JSZip.loadAsync(buffer);
-  const parsed = JSON.parse(await zip.file('animation/animation.json').async('string'));
-  assert.equal(parsed.assets[0].e, 1, 'asset should be marked embedded');
-});
-
-test('does not mutate input template object', async () => {
-  const tpl = fakeLottie();
-  const before = tpl.assets[0].p;
-  await buildLottieSticker({
-    image: { buffer: PNG, mime: 'image/png' },
-    template: tpl,
-  });
-  assert.equal(tpl.assets[0].p, before, 'caller template was mutated');
-});
-
-test('rejects unsupported MIME', async () => {
-  await assert.rejects(
-    buildLottieSticker({
-      image: { buffer: Buffer.from('hello'), mime: 'image/gif' },
-      template: fakeLottie(),
-    }),
-    /Unsupported mime/,
+test('customizeMetadata defaults is-from-user-created-pack to 1', async () => {
+  const buf = await buildFakeWAS();
+  const out = await inspectWAS(
+    await customizeMetadata(buf, { packName: 'x' }, { merge: false }),
   );
+  assert.equal(out.metadata['is-from-user-created-pack'], 1);
 });
 
-test('rejects template with no base64 image asset and no selector', async () => {
-  const tpl = fakeLottie();
-  tpl.assets[0].p = 'external.png';
-  await assert.rejects(
-    buildLottieSticker({
-      image: { buffer: PNG, mime: 'image/png' },
-      template: tpl,
-    }),
-    /No embedded base64 image asset/,
-  );
+test('extractFromWAS rejects an empty/invalid buffer', async () => {
+  await assert.rejects(extractFromWAS(null), /buffer is required/);
 });
 
-test('builds from the bundled "pulse" template', async () => {
-  const { buffer } = await buildLottieSticker({
-    image: { buffer: PNG, mime: 'image/png' },
-    template: bundledTemplate('pulse'),
-  });
-  const zip = await JSZip.loadAsync(buffer);
-  const jsonFile = zip.file('animation/animation.json');
-  assert.ok(jsonFile, 'expected JSON entry to be present');
-  const parsed = JSON.parse(await jsonFile.async('string'));
-  assert.equal(parsed.assets[0].p, `data:image/png;base64,${PNG.toString('base64')}`);
-});
+test('extractFromWAS picks animation.json over other JSONs', async () => {
+  const jsonBytes = Buffer.from(JSON.stringify(FAKE_LOTTIE), 'utf8');
+  const zip = new JSZip();
+  zip.file('animation/animation_secondary.json', jsonBytes);
+  zip.file('animation/animation.json', jsonBytes);
+  zip.file('animation/animation.json.trust_token', makeFakeTrustToken(jsonBytes));
+  const buf = await zip.generateAsync({ type: 'nodebuffer' });
 
-test('bundledTemplate rejects unknown name', () => {
-  assert.throws(() => bundledTemplate('nope'), /Unknown bundled template/);
-});
-
-test('asset selector by index works', async () => {
-  const tpl = fakeLottie();
-  tpl.assets[0].p = 'external.png';
-  const { buffer } = await buildLottieSticker({
-    image: { buffer: PNG, mime: 'image/png' },
-    template: tpl,
-    assetSelector: 0,
-  });
-  const zip = await JSZip.loadAsync(buffer);
-  const parsed = JSON.parse(await zip.file('animation/animation.json').async('string'));
-  assert.ok(parsed.assets[0].p.startsWith('data:image/png;base64,'));
+  const { jsonPath } = await extractFromWAS(buf);
+  assert.equal(jsonPath, 'animation/animation.json');
 });

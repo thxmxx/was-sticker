@@ -1,7 +1,7 @@
 {
   "name": "was-sticker",
-  "version": "0.1.1",
-  "description": "Build WhatsApp animated stickers (.was) from images and Lottie templates. Pure JS, no shell dependencies.",
+  "version": "2.0.0",
+  "description": "Re-brand WhatsApp Lottie stickers (.was) and send them via Baileys as a real lottieStickerMessage.",
   "type": "module",
   "main": "./src/index.js",
   "exports": {
@@ -12,7 +12,6 @@
   },
   "files": [
     "src",
-    "templates",
     "README.md",
     "LICENSE"
   ],
@@ -20,7 +19,6 @@
     "node": ">=18"
   },
   "scripts": {
-    "example": "node examples/build.js",
     "test": "node --test test/smoke.test.js"
   },
   "keywords": [
@@ -29,7 +27,8 @@
     "lottie",
     "was",
     "animated-sticker",
-    "baileys"
+    "baileys",
+    "lottieStickerMessage"
   ],
   "author": "thxmxx",
   "license": "MIT",
@@ -43,5 +42,13 @@
   },
   "dependencies": {
     "jszip": "^3.10.1"
+  },
+  "peerDependencies": {
+    "@whiskeysockets/baileys": ">=6.7.0"
+  },
+  "peerDependenciesMeta": {
+    "@whiskeysockets/baileys": {
+      "optional": true
+    }
   }
 }

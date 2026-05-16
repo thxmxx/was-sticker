@@ -5,4 +5,9 @@ examples/out/
 test/sandbox/*
 !test/sandbox/.gitkeep
 !test/sandbox/README.md
+
+# Playwright MCP / browser debugging artifacts
+.playwright-mcp/
+wa-*.png
+
 .DS_Store

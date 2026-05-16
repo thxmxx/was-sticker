@@ -1,26 +1,27 @@
 #!/usr/bin/env node
 import { parseArgs } from 'node:util';
-import { resolve } from 'node:path';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { dirname, resolve } from 'node:path';
 
-import { buildLottieSticker } from './index.js';
+import { inspectWAS } from './extract.js';
+import { customizeMetadata } from './customize.js';
 
-const USAGE = `was-sticker — build WhatsApp animated stickers from a Lottie template.
+const USAGE = `was-sticker — inspect and re-brand WhatsApp Lottie stickers (.was).
 
 Usage:
-  was-sticker --image <path> --template <path> [--out sticker.was]
-              [--selector <id|index>] [--json-entry <path-in-archive>]
+  was-sticker inspect <in.was>
+  was-sticker customize <in.was> -o <out.was>
+                                 [--pack-id ID] [--pack-name NAME]
+                                 [--publisher PUBLISHER] [--accessibility-text TEXT]
+                                 [--emoji EMOJI ... | --emojis "🎃,🎉,💎"]
+                                 [--no-merge]
 
-Options:
-  -i, --image     Image file (PNG, JPG, WEBP).                    [required]
-  -t, --template  Lottie folder, JSON file, or pre-parsed JSON.   [required]
-  -o, --out       Output .was path. Default: ./sticker.was
-  -s, --selector  Asset id (string) or 0-based index.
-      --json-entry  Path of the Lottie JSON inside the .was.
-  -h, --help      Show this help.
+Subcommands:
+  inspect      Show the Lottie metadata, trust-token claims, and SHA match.
+  customize    Rewrite only the overridden_metadata; emits a new .was.
 
-Examples:
-  was-sticker -i face.png -t ./templates/heart -o heart.was
-  was-sticker -i face.png -t lottie.json -s image_0
+For sending and capturing .was files, use the JS API:
+    import { sendLottieSticker, captureNextLottieSticker } from 'was-sticker';
 `;
 
 function fail(msg, code = 1) {
@@ -28,46 +29,74 @@ function fail(msg, code = 1) {
   process.exit(code);
 }
 
-const { values } = parseArgs({
-  options: {
-    image:      { type: 'string', short: 'i' },
-    template:   { type: 'string', short: 't' },
-    out:        { type: 'string', short: 'o' },
-    selector:   { type: 'string', short: 's' },
-    'json-entry': { type: 'string' },
-    help:       { type: 'boolean', short: 'h' },
-  },
-  allowPositionals: false,
-});
+const [, , sub, ...rest] = process.argv;
 
-if (values.help) {
+if (!sub || sub === '-h' || sub === '--help') {
   process.stdout.write(USAGE);
+  process.exit(sub ? 0 : 1);
+}
+
+async function readInput(positional) {
+  if (!positional) fail('Missing <in.was>.');
+  return readFile(resolve(positional));
+}
+
+async function writeOutput(path, buffer) {
+  const abs = resolve(path);
+  await mkdir(dirname(abs), { recursive: true });
+  await writeFile(abs, buffer);
+  return abs;
+}
+
+if (sub === 'inspect') {
+  const buffer = await readInput(rest[0]);
+  const info = await inspectWAS(buffer);
+  process.stdout.write(JSON.stringify(info, null, 2) + '\n');
   process.exit(0);
 }
 
-if (!values.image || !values.template) {
-  process.stderr.write(USAGE);
-  fail('\nMissing required --image or --template.');
-}
-
-const output = resolve(values.out ?? './sticker.was');
-
-const selector =
-  values.selector == null
-    ? undefined
-    : /^\d+$/.test(values.selector)
-      ? Number(values.selector)
-      : values.selector;
-
-try {
-  const { output: written, buffer } = await buildLottieSticker({
-    image: values.image,
-    template: values.template,
-    output,
-    assetSelector: selector,
-    jsonEntryName: values['json-entry'],
+if (sub === 'customize') {
+  const { values, positionals } = parseArgs({
+    args: rest,
+    allowPositionals: true,
+    options: {
+      out: { type: 'string', short: 'o' },
+      'pack-id':            { type: 'string' },
+      'pack-name':          { type: 'string' },
+      publisher:            { type: 'string' },
+      'accessibility-text': { type: 'string' },
+      emoji:                { type: 'string', multiple: true },
+      emojis:               { type: 'string' },
+      'no-merge':           { type: 'boolean' },
+      help:                 { type: 'boolean', short: 'h' },
+    },
   });
-  process.stdout.write(`${written}  (${buffer.length.toLocaleString()} bytes)\n`);
-} catch (err) {
-  fail(`Error: ${err.message}`);
+
+  if (values.help) {
+    process.stdout.write(USAGE);
+    process.exit(0);
+  }
+  if (!positionals[0]) fail('Missing <in.was>.');
+  if (!values.out)     fail('Missing --out / -o.');
+
+  const buffer = await readInput(positionals[0]);
+
+  const emojis = values.emoji?.length
+    ? values.emoji
+    : values.emojis?.split(',').map((s) => s.trim()).filter(Boolean);
+
+  const patch = {
+    ...(values['pack-id']            && { packId:            values['pack-id'] }),
+    ...(values['pack-name']          && { packName:          values['pack-name'] }),
+    ...(values.publisher             && { publisher:         values.publisher }),
+    ...(values['accessibility-text'] && { accessibilityText: values['accessibility-text'] }),
+    ...(emojis                       && { emojis }),
+  };
+
+  const out = await customizeMetadata(buffer, patch, { merge: !values['no-merge'] });
+  const path = await writeOutput(values.out, out);
+  process.stdout.write(`${path}  (${out.length.toLocaleString()} bytes)\n`);
+  process.exit(0);
 }
+
+fail(`Unknown subcommand "${sub}".\n\n${USAGE}`);
