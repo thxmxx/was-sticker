@@ -1,5 +1,8 @@
 # was-sticker
 
+[![CI](https://github.com/thxmxx/was-sticker/actions/workflows/ci.yml/badge.svg)](https://github.com/thxmxx/was-sticker/actions/workflows/ci.yml)
+[![npm](https://img.shields.io/npm/v/was-sticker.svg)](https://www.npmjs.com/package/was-sticker)
+
 Build WhatsApp animated stickers (`.was`) from an image plus a Lottie template — pure JS, no shell `zip` binary required.
 
 - ✅ **Zero shell dependencies** — uses [JSZip](https://stuk.github.io/jszip/), works on Linux, macOS, Windows, Termux.
