@@ -1,0 +1,15 @@
+.git
+.github
+node_modules
+test/sandbox/node_modules
+test/sandbox/auth
+test/sandbox/*.was
+test/sandbox/*.png
+test/sandbox/sniffed-*
+test/sandbox/preview.json
+test/sandbox/Lottie-Whatsapp
+.playwright-mcp
+wa-*.png
+*.log
+README.md
+LICENSE

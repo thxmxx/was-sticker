@@ -1,0 +1,33 @@
+# Fly.io app for the was-sticker rebrand bot.
+#
+# Bring-up:
+#   fly launch --no-deploy --copy-config        # imports this file
+#   fly volumes create was_sticker_data --size 1 --region gru
+#   fly secrets set PHONE=5527996311988
+#   fly deploy
+#   fly logs                                    # shows the 8-digit pairing code
+#
+# The volume holds /data/auth — surviving redeploys means you only pair once.
+
+app            = "was-sticker-bot"
+primary_region = "gru"      # São Paulo — closest to the WhatsApp CDN edges for BR
+
+[build]
+  dockerfile = "Dockerfile"
+
+[[mounts]]
+  source      = "was_sticker_data"
+  destination = "/data"
+
+[env]
+  PAIRING = "1"
+
+# Single instance — the bot holds one persistent WhatsApp socket; scaling > 1
+# would re-pair from the same auth and confuse WhatsApp.
+[[vm]]
+  size   = "shared-cpu-1x"
+  memory = "512mb"
+
+# No HTTP listener: the bot doesn't expose any service. Fly will keep the
+# process alive based on the Docker `CMD` exit code; the bot's internal
+# reconnect logic handles WhatsApp disconnects.
