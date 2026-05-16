@@ -73,6 +73,16 @@ test('builds from a folder template and writes to disk', async () => {
   assert.ok(zip.file('README.txt'), 'sibling asset missing');
 });
 
+test('marks the patched asset as embedded (e: 1) so players decode the data URI', async () => {
+  const { buffer } = await buildLottieSticker({
+    image: { buffer: PNG, mime: 'image/png' },
+    template: fakeLottie(),
+  });
+  const zip = await JSZip.loadAsync(buffer);
+  const parsed = JSON.parse(await zip.file('animation/animation.json').async('string'));
+  assert.equal(parsed.assets[0].e, 1, 'asset should be marked embedded');
+});
+
 test('does not mutate input template object', async () => {
   const tpl = fakeLottie();
   const before = tpl.assets[0].p;
