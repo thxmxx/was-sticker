@@ -3,21 +3,23 @@
 [![CI](https://github.com/thxmxx/was-sticker/actions/workflows/ci.yml/badge.svg)](https://github.com/thxmxx/was-sticker/actions/workflows/ci.yml)
 [![npm](https://img.shields.io/npm/v/was-sticker.svg)](https://www.npmjs.com/package/was-sticker)
 
-Build WhatsApp animated stickers (`.was`) from an image plus a Lottie template — pure JS, no shell `zip` binary required.
+Re-brand WhatsApp Lottie stickers (`.was`) and send them through Baileys as a proper `lottieStickerMessage` — so they actually render on mobile.
 
-- ✅ **Zero shell dependencies** — uses [JSZip](https://stuk.github.io/jszip/); works on Linux, macOS, Windows, Termux.
-- ✅ **Async everywhere** — non-blocking I/O.
-- ✅ **Flexible inputs** — template as folder, JSON file, `Buffer`, or parsed object.
-- ✅ **Flexible asset selection** — by index, asset id, or a predicate.
-- ✅ **Returns a `Buffer`** — feed it straight to Baileys without touching disk.
-- ✅ **MIME sniffing** — from extension *and* magic bytes.
-- ✅ **CLI included** — `npx was-sticker -i face.png -t ./tpl -o sticker.was`.
-- ✅ **Ships with a default template** — `bundledTemplate('pulse')` so you don't need to source a Lottie.
+> ⚠️ **What this is and isn't.** WhatsApp signs every animated Lottie sticker with an ES256 JWT (`trust_token`) carrying the SHA-256 of the animation JSON. Any change to the animation invalidates the token and the client silently drops the sticker. This library does **not** let you put your own image inside a Lottie animation. What it lets you do is **re-brand** a genuine WhatsApp Lottie sticker (change the pack name, publisher, emojis, group link) without breaking the signature. The animation itself stays a Meta-original sticker.
+>
+> If you want a sticker with your own artwork, you need WebP animated, not Lottie `.was`. That is not what this package does.
+
+## How it actually works
+
+1. **Source** a `.was` whose `trust_token` is genuine. The library ships a Baileys helper, `captureNextLottieSticker`, that listens for the next animated sticker delivered to your account and saves the encrypted `.was` to disk.
+2. **Customize** only the `overridden_metadata` inside the archive. The animation JSON and the trust_token are preserved byte-for-byte, so the client-side SHA check still passes.
+3. **Send** via `sendLottieSticker`, which wraps your sticker in a `lottieStickerMessage` (FutureProofMessage at field 74). Baileys' regular `sock.sendMessage({ sticker, mimetype })` emits `stickerMessage` (field 26) — Web tolerates it, mobile does not.
 
 ## Install
 
 ```bash
 npm install was-sticker
+npm install @whiskeysockets/baileys      # peer dep, only needed for send/capture
 ```
 
 Requires Node.js ≥ 18.
@@ -25,199 +27,134 @@ Requires Node.js ≥ 18.
 ## Quick start
 
 ```js
-import { buildLottieSticker, bundledTemplate } from 'was-sticker';
+import { readFile, writeFile } from 'node:fs/promises';
+import {
+  inspectWAS,
+  customizeMetadata,
+  sendLottieSticker,
+  captureNextLottieSticker,
+} from 'was-sticker';
 
-const { buffer } = await buildLottieSticker({
-  image: 'face.png',
-  template: bundledTemplate('pulse'),
+// 1. Source a .was by waiting for one to arrive.
+const { buffer } = await captureNextLottieSticker(sock, { timeoutMs: 120_000 });
+await writeFile('./pumpkin.was', buffer);
+
+// 2. Inspect it (sanity check).
+console.log(await inspectWAS(buffer));
+// → { animation: { nm: 'WA_Harvest_…', w: 512, h: 512, fps: 60, ... },
+//     trustToken: { kid: '196', alg: 'ES256', claimedSha: '...' },
+//     shaMatches: true, ... }
+
+// 3. Re-brand it.
+const rebranded = await customizeMetadata(buffer, {
+  packId: 'my-bot-pack-v1',
+  packName: 'My Bot Pack',
+  publisher: 'Bot\nMade with was-sticker',
+  accessibilityText: 'A custom animated sticker',
+  emojis: ['💎', '✨'],
 });
-// → `buffer` is a ready-to-send .was sticker
+
+// 4. Send it on Baileys with the right wrapper.
+await sendLottieSticker(sock, '5511…@s.whatsapp.net', rebranded);
 ```
-
-A full runnable example lives in [`examples/build.js`](./examples/build.js).
-
-## WhatsApp sticker constraints
-
-WhatsApp will silently reject animated stickers that violate these rules. The library does not enforce them — you stay in control of the inputs:
-
-| Rule                 | Limit                                     |
-| -------------------- | ----------------------------------------- |
-| Dimensions           | 512 × 512 pixels                          |
-| File size            | ≤ 500 KB                                  |
-| Duration             | ≤ 6 seconds                               |
-| Frame rate           | typically 30 fps                          |
-| Background           | Transparent recommended (PNG/WebP alpha)  |
-
-If your animated sticker isn't showing on the client, it almost always means one of the above failed. Resize your image first (e.g. with [`sharp`](https://sharp.pixelplumbing.com/)) before passing it in.
 
 ## API
 
-### `buildLottieSticker(options)`
+### `extractFromWAS(buffer)`
 
-```js
-const { buffer, output, mime } = await buildLottieSticker({
-  image,           // required
-  template,        // required
-  output,          // optional — write to this path if set
-  assetSelector,   // optional — which asset to swap
-  jsonEntryName,   // optional — path inside the .was for the Lottie JSON
-  extraFiles,      // optional — additional files to bundle in the archive
-});
+Parses the ZIP archive. Returns `{ files, jsonPath, animation, trustToken, trustTokenPath, metadata, metadataPath }`.
+
+### `inspectWAS(buffer)`
+
+Higher-level summary intended for CLI / debugging output:
+
+```ts
+{
+  jsonPath: string,
+  animation: { nm, version, width, height, fps, durationFrames, layers, assets },
+  metadata: object | null,
+  trustToken: { kid, alg, stickerFileType, trustedOrigin, claimedSha } | null,
+  sha256: string,
+  shaMatches: boolean,   // <-- this is the only field that ultimately matters
+  size: number,
+  fileNames: string[],
+}
 ```
 
-Returns `{ buffer: Buffer, output?: string, mime: 'application/was' }`.
+If `shaMatches` is `false`, the WhatsApp client will reject the sticker.
 
-**`image`** — the picture to embed.
+### `customizeMetadata(buffer, patch, { merge = true })`
 
-| Form                                 | Behavior                                       |
-| ------------------------------------ | ---------------------------------------------- |
-| `'face.png'` (string path)           | Reads file; sniffs MIME from extension *and* magic bytes. |
-| `Buffer`                             | Sniffs MIME from magic bytes only.             |
-| `{ buffer, mime }`                   | Trust the caller-provided MIME.                |
-| `{ path, mime? }`                    | Reads file; mime override optional.            |
+Returns a new `.was` buffer with `overridden_metadata` rewritten. Allowed `patch` fields:
 
-Supported: `image/png`, `image/jpeg`, `image/webp`.
+| Camel-case input    | Underlying WhatsApp field         |
+| ------------------- | --------------------------------- |
+| `packId`            | `sticker-pack-id`                 |
+| `packName`          | `sticker-pack-name`               |
+| `publisher`         | `sticker-pack-publisher` (newlines OK — the second line typically holds a group link) |
+| `accessibilityText` | `accessibility-text`              |
+| `emojis`            | `emojis` (array of glyphs)        |
+| `isFromUserCreatedPack` | `is-from-user-created-pack` (default `1`) |
 
-**`template`** — the Lottie scaffold to inject the image into.
+`merge: false` rewrites the metadata from scratch instead of merging with what's already there.
 
-| Form                                  | Behavior                                                                              |
-| ------------------------------------- | ------------------------------------------------------------------------------------- |
-| `bundledTemplate('pulse')`            | Use the shipped `pulse` template (1-second scale pulse, 30 fps).                      |
-| `'./folder'` (directory path)         | Walks the folder; uses the first `.json` as the Lottie, bundles everything else.      |
-| `'./lottie.json'` (file path)         | Reads and parses the JSON.                                                            |
-| `Buffer`                              | Parses as UTF-8 JSON.                                                                 |
-| `object` (parsed Lottie)              | Deep-cloned before patching — your input is never mutated.                            |
+The animation JSON and the trust_token are not touched.
 
-**`assetSelector`** — which `assets[]` entry to overwrite. Default: first asset whose `p` starts with `data:image/`.
+### `sendLottieSticker(sock, jid, buffer, opts?)`
 
-```js
-// Default — find the first embedded base64 image
-buildLottieSticker({ image, template });
+Uploads `buffer` via Baileys' `prepareWAMessageMedia`, then relays it as a `lottieStickerMessage`.
 
-// By array index
-buildLottieSticker({ image, template, assetSelector: 0 });
-
-// By asset id
-buildLottieSticker({ image, template, assetSelector: 'image_0' });
-
-// By predicate
-buildLottieSticker({ image, template, assetSelector: a => a.w === 512 });
+```ts
+opts?: {
+  width?: number,
+  height?: number,
+  accessibilityLabel?: string,
+  messageId?: string,
+  quoted?: WAMessage,
+}
 ```
 
-**`jsonEntryName`** — where the Lottie JSON ends up inside the `.was` archive. Defaults: the original path when `template` is a folder, otherwise `animation/animation.json`.
+Returns `{ messageId, fileLength }`.
 
-**`extraFiles`** — extra files to bundle, keyed by archive path:
+### `captureNextLottieSticker(sock, opts?)`
 
-```js
-buildLottieSticker({
-  image, template,
-  extraFiles: { 'meta.json': JSON.stringify({ pack: 'mine' }) },
-});
+Resolves with the next incoming Lottie sticker, downloaded and decrypted.
+
+```ts
+opts?: {
+  timeoutMs?: number,   // default 60_000; 0 = no timeout
+  from?: string,        // restrict to one JID
+  filter?: (stk, key) => boolean,
+  includeNonLottie?: boolean,  // default false
+}
 ```
 
-### `bundledTemplate(name)`
-
-Returns the absolute path of a Lottie template shipped with the package. Currently the only template is `'pulse'` (the default).
-
-```js
-import { bundledTemplate } from 'was-sticker';
-bundledTemplate();        // → /…/templates/pulse/animation.json
-bundledTemplate('pulse'); // → same
-```
-
-### MIME helpers
-
-```js
-import {
-  SUPPORTED_MIMES,            // ['image/png', 'image/jpeg', 'image/webp']
-  detectMimeFromExtension,    // (path: string) => string | null
-  detectMimeFromBuffer,       // (buffer: Buffer) => string | null
-} from 'was-sticker';
-```
+Returns `{ buffer, stickerMessage, key, mimetype, isLottie, isAnimated, width, height }`.
 
 ## CLI
 
 ```bash
-was-sticker --image face.png --template <folder-or-json> --out sticker.was
-was-sticker -i face.png -t lottie.json -s image_0
-was-sticker --help
+was-sticker inspect <in.was>
+was-sticker customize <in.was> -o <out.was> \
+    --pack-name "My Pack" \
+    --publisher "Me\nGrupo: https://example.com" \
+    --emoji 🎃 --emoji 💎
 ```
 
-| Flag                   | Description                                                  |
-| ---------------------- | ------------------------------------------------------------ |
-| `-i, --image`          | Image file (PNG / JPG / WebP). **Required.**                 |
-| `-t, --template`       | Lottie folder, JSON file, or parsed JSON. **Required.**      |
-| `-o, --out`            | Output `.was` path. Default `./sticker.was`.                 |
-| `-s, --selector`       | Asset id (string) or 0-based index.                          |
-| `    --json-entry`     | Path of the Lottie JSON inside the archive.                  |
-| `-h, --help`           | Show help.                                                   |
+`inspect` prints the JSON summary above. `customize` writes the rebranded archive.
 
-## Baileys integration
+Sending and capturing are intentionally not in the CLI — both require a connected Baileys socket; do them from a script (see `examples/`).
 
-```js
-import { buildLottieSticker, bundledTemplate } from 'was-sticker';
+## Examples
 
-const { buffer } = await buildLottieSticker({
-  image: incomingPhotoBuffer,         // Buffer you already have in memory
-  template: bundledTemplate('pulse'),
-});
+- [`examples/capture.js`](./examples/capture.js) — wait for a forwarded sticker and save it.
+- [`examples/customize-and-send.js`](./examples/customize-and-send.js) — rebrand and send.
 
-await sock.sendMessage(jid, {
-  sticker: buffer,
-  mimetype: 'application/was',
-});
-```
+## Notes / gotchas
 
-## Bring your own template
-
-A `.was` is a ZIP archive containing a Lottie JSON (plus any sibling assets the animation references). The Lottie JSON must have at least one image asset embedded as a `data:` URI — that's the slot the library swaps your image into:
-
-```json
-{
-  "v": "5.7.1",
-  "fr": 30,
-  "ip": 0,
-  "op": 30,
-  "w": 512, "h": 512,
-  "assets": [
-    {
-      "id": "image_0",
-      "w": 512, "h": 512,
-      "u": "",
-      "p": "data:image/png;base64,iVBORw0KGgo…"
-    }
-  ],
-  "layers": [ /* layer referencing refId: 'image_0' */ ]
-}
-```
-
-To use it:
-
-1. Save the JSON (and any sibling files it references) anywhere on disk.
-2. Pass the folder path — or the single JSON path — as `template`.
-
-If you target the wrong asset, set `assetSelector` to the right id, index, or predicate.
-
-## Troubleshooting
-
-| Error                                            | Cause / fix                                                                                |
-| ------------------------------------------------ | ------------------------------------------------------------------------------------------ |
-| `No embedded base64 image asset found.`          | Template has no `assets[].p` starting with `data:image/`. Add one, or pass `assetSelector`. |
-| `Unable to detect image mime.`                   | Buffer wasn't PNG/JPG/WebP, or path has no extension. Pass `mime` explicitly.              |
-| `Unsupported mime "image/gif".`                  | Only PNG, JPEG, WebP are supported.                                                        |
-| Sticker doesn't render in WhatsApp               | Almost always a size/dimension issue — see [constraints](#whatsapp-sticker-constraints).   |
-| `Lottie template has no \`assets\` array.`       | The JSON you passed isn't a valid Lottie file.                                             |
-
-## Roadmap
-
-Deliberately out of v0.1 to keep the surface small:
-
-- **`sharp` preprocessing hook** — auto-resize to 512×512, enforce the 500 KB budget.
-- **Template registry** — more shipped templates (heart, fire, sparkles, etc.).
-- **Multi-frame stickers** — accept an array of images.
-- **Validation pass** — warn when output violates WhatsApp constraints.
-- **TypeScript declarations** — emit `.d.ts` alongside the JSDoc.
-- **Streaming output** — stream the ZIP to disk for large bundles.
+- **Mobile vs Web parity.** Mobile WhatsApp will silently drop Lottie payloads that arrive as plain `stickerMessage`. Web will render them. Use `sendLottieSticker`, not `sock.sendMessage({ sticker, mimetype: 'application/was' })`.
+- **The pack info shown in Web** comes from WhatsApp's official catalog keyed by the animation's identity, not from your `overridden_metadata`. Mobile reads your metadata. This is a WhatsApp quirk, not a bug.
+- **Use at your own risk.** Sending modified `.was` files through unofficial clients (Baileys is one) violates WhatsApp's Terms of Service and can result in your number being banned. Test on a throwaway account.
 
 ## License
 
